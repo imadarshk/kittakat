@@ -74,6 +74,8 @@ XLSX monetary values whose paisa integers exceed 15 digits are exported as exact
 
 No destructive entry deletion is provided. Correct an entry to create a new immutable revision. Disputed amounts stay included and visibly flagged; acceptance never applies the amount twice.
 
+Database triggers also enforce append-only financial revisions and audit events. They reject updates, deletions, and SQLite replacement conflicts, including explicit rowid conflicts. An entry cannot move between spaces, change its original creator or creation timestamp, or point to a missing/skipped revision. See [Data integrity and recovery](docs/data-integrity.md) for the trust boundary, verification, and recovery procedure.
+
 ## Support
 
 If any bug found or want to add features, or want to change something email at [Kittakat@adarshkhanal.com.np](mailto:Kittakat@adarshkhanal.com.np)

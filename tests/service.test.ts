@@ -264,3 +264,116 @@ test('aggregate receivables and payables cannot exceed safe paisa even when indi
   assert.equal((await f.service.bootstrap(f.a.user,f.id)).entries.length,2);
   }
 });
+
+test('database rejects rewriting, deleting or replacing saved financial revisions', async () => {
+  const f=await fixture();
+  const entryId=await f.service.createEntry(f.a.user,f.id,expense(f.a.user.id,[f.b.user.id]));
+  const original=f.db.raw.prepare('SELECT * FROM revisions WHERE entry_id=?').get(entryId);
+  for (const sql of [
+    "UPDATE revisions SET payload_json='{}' WHERE entry_id=?",
+    "UPDATE revisions SET reason='hidden edit' WHERE entry_id=?",
+    'DELETE FROM revisions WHERE entry_id=?',
+    "INSERT OR REPLACE INTO revisions SELECT entry_id,revision,'{}',reason,actor_id,created_at FROM revisions WHERE entry_id=?",
+  ]) assert.throws(()=>f.db.raw.prepare(sql).run(entryId),/immutable|append.only/i);
+  assert.deepEqual(f.db.raw.prepare('SELECT * FROM revisions WHERE entry_id=?').get(entryId),original);
+});
+
+test('database audit trail rejects update, deletion and replacement', async () => {
+  const f=await fixture();
+  const event=f.db.raw.prepare('SELECT * FROM audit_events LIMIT 1').get()!;
+  for (const sql of [
+    "UPDATE audit_events SET metadata_json='{} changed' WHERE id=?",
+    'DELETE FROM audit_events WHERE id=?',
+    "INSERT OR REPLACE INTO audit_events SELECT id,space_id,entry_id,actor_id,'hidden edit',revision,metadata_json,created_at FROM audit_events WHERE id=?",
+  ]) assert.throws(()=>f.db.raw.prepare(sql).run(event.id),/immutable|append.only/i);
+  assert.deepEqual(f.db.raw.prepare('SELECT * FROM audit_events WHERE id=?').get(event.id),event);
+});
+
+test('database entries cannot change identity, move spaces, disappear or skip a revision', async () => {
+  const f=await fixture();
+  const entryId=await f.service.createEntry(f.a.user,f.id,expense(f.a.user.id,[f.b.user.id]));
+  const other=await f.service.createSpace(f.a.user,'Other');
+  const mutations:[string,...unknown[]][]=[
+    ['UPDATE entries SET space_id=? WHERE id=?',other,entryId],
+    ['UPDATE entries SET creator_id=? WHERE id=?',f.b.user.id,entryId],
+    ["UPDATE entries SET created_at='2000-01-01' WHERE id=?",entryId],
+    ['DELETE FROM entries WHERE id=?',entryId],
+    ['UPDATE entries SET revision=2 WHERE id=?',entryId],
+    ['INSERT OR REPLACE INTO entries SELECT id,space_id,creator_id,revision,created_at FROM entries WHERE id=?',entryId],
+  ];
+  for(const [sql,...values] of mutations) assert.throws(()=>f.db.raw.prepare(sql).run(...values as never[]),/immutable|revision|append.only/i);
+  const state=await f.service.bootstrap(f.a.user,f.id);
+  assert.equal(state.entries[0].creatorId,f.a.user.id);
+  assert.equal(state.entries[0].revision,1);
+});
+
+test('database only appends sequential corrections by the creator with a reason', async () => {
+  const f=await fixture();
+  const entryId=await f.service.createEntry(f.a.user,f.id,expense(f.a.user.id,[f.b.user.id]));
+  const sql='INSERT INTO revisions (entry_id,revision,payload_json,reason,actor_id,created_at) SELECT entry_id,?,payload_json,?,?,created_at FROM revisions WHERE entry_id=? AND revision=1';
+  for(const [revision,actor,reason] of [[3,f.a.user.id,'Skipped'],[2,f.b.user.id,'Wrong author'],[2,f.a.user.id,'']] as const) {
+    assert.throws(()=>f.db.raw.prepare(sql).run(revision,reason,actor,entryId),/revision|creator|reason/i);
+  }
+  await f.service.reviseEntry(f.a.user,f.id,entryId,{...expense(f.a.user.id,[f.b.user.id]),amountCents:9000,expectedRevision:1,reason:'Receipt correction'});
+  const state=await f.service.bootstrap(f.a.user,f.id);
+  assert.deepEqual(state.entries[0].history.map(r=>r.payload.amountCents),[10001,9000]);
+  assert.throws(()=>f.db.raw.prepare('UPDATE entries SET revision=1 WHERE id=?').run(entryId),/revision/i);
+});
+
+test('server ignores forged ownership, portions, timestamps and historical records in request bodies', async () => {
+  const f=await fixture();
+  const entryId=await f.service.createEntry(f.a.user,f.id,{...expense(f.a.user.id,[f.b.user.id]),creatorId:f.b.user.id,spaceId:'forged',revision:999,createdAt:'2000-01-01',history:[],portions:{[f.b.user.id]:0}});
+  const entry=(await f.service.bootstrap(f.a.user,f.id)).entries.find(e=>e.id===entryId)!;
+  assert.equal(entry.creatorId,f.a.user.id);
+  assert.equal(entry.spaceId,f.id);
+  assert.equal(entry.revision,1);
+  assert.notEqual(entry.createdAt,'2000-01-01');
+  assert.equal(entry.payload.kind==='expense'&&entry.payload.portions[f.b.user.id],10001);
+  assert.equal(entry.history.length,1);
+});
+
+test('space ownership and currency cannot be rewritten through SQL REPLACE', async () => {
+  const f=await fixture();
+  assert.throws(()=>f.db.raw.prepare("INSERT OR REPLACE INTO spaces (id,name,owner_id,code,currency,created_at,ledger_version) SELECT id,name,?,code,'USD',created_at,ledger_version FROM spaces WHERE id=?").run(f.b.user.id,f.id),/immutable|replace/i);
+  assert.throws(()=>f.db.raw.prepare('UPDATE spaces SET owner_id=? WHERE id=?').run(f.b.user.id,f.id),/immutable/i);
+  const space=(await f.service.bootstrap(f.a.user,f.id)).activeSpace!;
+  assert.equal(space.ownerId,f.a.user.id);
+  assert.equal(space.currency,'NPR');
+  await f.service.rotateCode(f.a.user,f.id);
+});
+
+test('SQLite rowid aliases cannot replace financial records or audit events', async () => {
+  const f=await fixture();
+  const entryId=await f.service.createEntry(f.a.user,f.id,expense(f.a.user.id,[f.b.user.id]));
+  for(const alias of ['rowid','_rowid_','oid']) {
+    const attacks:[string,...unknown[]][]=[
+      [`INSERT OR REPLACE INTO revisions (${alias},entry_id,revision,payload_json,reason,actor_id,created_at) SELECT rowid,entry_id,2,payload_json,'Replacement',actor_id,created_at FROM revisions WHERE entry_id=?`,entryId],
+      [`INSERT OR REPLACE INTO audit_events (${alias},id,space_id,entry_id,actor_id,action,revision,metadata_json,created_at) SELECT rowid,'replacement-audit',space_id,entry_id,actor_id,action,revision,metadata_json,created_at FROM audit_events LIMIT 1`],
+      [`INSERT OR REPLACE INTO entries (${alias},id,space_id,creator_id,revision,created_at) SELECT rowid,'replacement-entry',space_id,creator_id,1,created_at FROM entries WHERE id=?`,entryId],
+      [`INSERT OR REPLACE INTO spaces (${alias},id,name,owner_id,code,currency,created_at,ledger_version) SELECT rowid,'replacement-space',name,owner_id,'new-code',currency,created_at,ledger_version FROM spaces WHERE id=?`,f.id],
+    ];
+    for(const [sql,...values] of attacks) assert.throws(()=>f.db.raw.prepare(sql).run(...values as never[]),/append.only|replace|immutable/i);
+  }
+  assert.equal((f.db.raw.prepare('SELECT count(*) AS n FROM revisions').get() as {n:number}).n,1);
+});
+
+test('UPDATE OR REPLACE cannot use rowid changes to delete another entry or space', async () => {
+  const f=await fixture();
+  const one=await f.service.createEntry(f.a.user,f.id,expense(f.a.user.id,[f.b.user.id]));
+  const two=await f.service.createEntry(f.a.user,f.id,expense(f.a.user.id,[f.c.user.id]));
+  const other=await f.service.createSpace(f.a.user,'Other');
+  // A saved next revision makes the pointer update otherwise valid.
+  f.db.raw.prepare("INSERT INTO revisions SELECT entry_id,2,payload_json,'Correction',actor_id,created_at FROM revisions WHERE entry_id=?").run(one);
+  assert.throws(()=>f.db.raw.prepare('UPDATE OR REPLACE entries SET rowid=(SELECT rowid FROM entries WHERE id=?),revision=2 WHERE id=?').run(two,one),/immutable/i);
+  assert.throws(()=>f.db.raw.prepare('UPDATE OR REPLACE spaces SET rowid=(SELECT rowid FROM spaces WHERE id=?) WHERE id=?').run(other,f.id),/immutable/i);
+  assert.equal((f.db.raw.prepare('SELECT count(*) AS n FROM entries').get() as {n:number}).n,2);
+  assert.equal((f.db.raw.prepare('SELECT count(*) AS n FROM spaces').get() as {n:number}).n,2);
+});
+
+test('invitation code updates cannot replace another space, even an incomplete imported space', async () => {
+  const f=await fixture();
+  f.db.raw.prepare("INSERT INTO spaces SELECT 'imported-space',name,owner_id,'imported-code',currency,created_at,ledger_version FROM spaces WHERE id=?").run(f.id);
+  assert.throws(()=>f.db.raw.prepare("UPDATE OR REPLACE spaces SET code='imported-code' WHERE id=?").run(f.id),/replace/i);
+  assert.equal((f.db.raw.prepare('SELECT count(*) AS n FROM spaces').get() as {n:number}).n,2);
+  assert.equal((await f.service.bootstrap(f.a.user,f.id)).activeSpace!.code,f.code);
+});
