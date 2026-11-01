@@ -1,5 +1,5 @@
 import { DatabaseSync, backup } from 'node:sqlite';
-import { mkdirSync, chmodSync, renameSync } from 'node:fs';
+import { mkdirSync, chmodSync, renameSync, readdirSync, lstatSync, unlinkSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 
 const source=process.env.KITTAKAT_DB_PATH;
@@ -18,3 +18,10 @@ try {
 } finally { restored.close(); }
 renameSync(temporary,target);
 console.log(`Validated backup: ${target}`);
+// Retain at least 31 completed snapshots and every snapshot less than 31 days old.
+// Never prune unless the new backup has already passed both integrity checks.
+const snapshots=readdirSync(directory).filter(name=>/^kittakat-\d{4}-\d{2}-\d{2}T[\d.-]+Z\.sqlite$/.test(name)).sort().reverse();
+for (const name of snapshots.slice(31)) {
+  const file=join(directory,name),stat=lstatSync(file);
+  if (file!==target&&stat.isFile()&&stat.mtimeMs<Date.now()-31*86400_000) unlinkSync(file);
+}
