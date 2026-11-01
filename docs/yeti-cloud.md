@@ -50,3 +50,62 @@ Deleting the environment or its persistent volume can delete the only copy of re
 3. Run `npm ci --include=dev` and `npm run build:node`.
 4. Restart the single app process.
 5. Check the HTTPS home page, `/api/bootstrap`, and your own login.
+
+
+## This installation
+
+- Repository: https://github.com/imadarshk/kittakat (main)
+- Environment: `env-6468131`
+- Application node: `27007`, Node.js 24.22.2
+- Nginx balancer node: `27008`, public address `45.115.217.211`
+- Public hostname: `kittakat.duckdns.org`
+- Application checkout: `/home/jelastic/ROOT/kittakat`
+- Private records: `/home/jelastic/ROOT/kittakat-data/kittakat.sqlite`
+- Process configuration: `/home/jelastic/ROOT/ecosystem.config.js`
+- Actual app port: `3000`, matching Yeti's automatic forwarding (the generic npm start default is 8080)
+- Certificate: Let's Encrypt, issued for `kittakat.duckdns.org`, with the platform's renewal add-on installed
+- Application release: `27bf10b63dd3c1da29e52fcf7b80270d4e95dc70`
+
+The checkout and records are sibling folders inside Yeti's preserved `ROOT` directory. The app serves only its own public/build assets; the private records folder is outside the checkout. Update this checkout using Git rather than replacing the entire `ROOT` directory. The container's existing `/etc/jelastic/redeploy.conf` preserves `ROOT` during container updates. Deleting the whole environment is different and still requires an independent backup.
+
+PM2 keeps the `kittakat` process running and its configuration was saved with `pm2 save`. The original demonstration app is stopped. The Nginx gateway sends traffic to the app on private port 3000 and replaces the client IP and protocol headers. Its HTTP server redirects to HTTPS except for `/.well-known/acme-challenge/`, which remains reachable for certificate renewal. The redirect is configured in `/etc/nginx/nginx-jelastic.conf`; recheck it after changing the environment topology because the platform may regenerate its configuration.
+
+The Let's Encrypt add-on reports automatic renewal one month before expiry and sends an email notification. The current certificate expires on 30 January 2027. Future renewal has not yet occurred.
+
+### Opening and using your app
+
+Visit **https://kittakat.duckdns.org** and choose **Create account** to create your own app login. This is a fresh Yeti database; existing records or accounts from a Cloudflare deployment were not imported. A GitHub login and a Kittakat app login are separate things.
+
+GitHub stores the recipe for the app. Yeti runs it. DuckDNS is the address people use to find it. The SQLite file stores the actual accounts and expense records, so it must be protected separately from the code.
+
+### Operational commands for this server
+
+In Yeti, open **Web SSH on application node 27007**. These commands inspect or restart the existing app:
+
+```sh
+pm2 status
+pm2 logs kittakat --lines 50 --nostream
+pm2 restart kittakat
+pm2 save
+```
+
+Future GitHub changes are **not automatically deployed**. After making a consistent database backup, update this installation with:
+
+```sh
+cd /home/jelastic/ROOT/kittakat
+git pull --ff-only origin main
+npm ci --include=dev
+npm run build:node
+pm2 restart /home/jelastic/ROOT/ecosystem.config.js --update-env
+pm2 save
+```
+
+Stop if any command fails and inspect the error before proceeding. This simple update procedure involves a short interruption while the production build is replaced. A code rollback must preserve the database, and database migrations may require a separate recovery decision.
+
+No scheduled or off-server database backup has been configured. The private `backups` directory is prepared, but directory creation alone does not protect records. Before storing important records, arrange encrypted independent backups and verify restoration. The backup guidance above explains how to obtain a consistent database copy.
+
+### Verification and cost record
+
+On 1 November 2026, 62 automated tests, type checking, linting, both build targets, and 72 local HTTP integration checks passed. GitHub CI passed for the application release. Public checks verified the home page and all 17 linked JS/CSS assets, database bootstrap, secure session cookie attributes, rejection of a foreign-origin mutation, and 404 responses for database/configuration paths. HTTP returns 308 to HTTPS, while the certificate challenge route is not redirected. The app responded after a PM2 restart, and the login page loaded in Safari Personal.
+
+The approved configuration is one Node 24 app server plus a small Nginx balancer with a public IPv4 address. Yeti displayed a total estimate of **NPR 2.149–6.08/hour after beta**, approximately **NPR 1,547–4,378 for 30 days** of continuous operation, before other charges. The interface labeled it free during beta. This is a recorded estimate, not a price guarantee or spending cap; check the Yeti billing dashboard for current charges.
