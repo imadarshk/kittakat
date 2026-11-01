@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -75,4 +76,16 @@ test('a broken migration rolls back the whole upgrade and changing an applied mi
       assert.equal((raw.prepare('SELECT count(*) AS n FROM _kittakat_migrations').get() as {n:number}).n,1);
     } finally { raw.close(); }
   } finally { rmSync(dir,{recursive:true,force:true}); }
+});
+
+test('completed backup command publishes a standalone snapshot without temporary WAL sidecars', () => {
+  const dir=mkdtempSync(join(tmpdir(),'kittakat-backup-cli-'));
+  const file=join(dir,'live.sqlite'),out=join(dir,'backups');
+  const db=new SQLiteDatabase(file);
+  try {
+    const result=spawnSync(process.execPath,['scripts/backup-server.mjs'],{encoding:'utf8',env:{...process.env,KITTAKAT_DB_PATH:file,KITTAKAT_BACKUP_DIR:out}});
+    assert.equal(result.status,0,result.stderr);
+    assert.equal(readdirSync(out).filter(name=>name.includes('.partial')).length,0);
+    assert.equal(readdirSync(out).filter(name=>name.endsWith('.sqlite')).length,1);
+  } finally { db.close(); rmSync(dir,{recursive:true,force:true}); }
 });
