@@ -16,7 +16,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "node scripts/migrate-local.mjs",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "NEXT_TELEMETRY_DISABLED=1 next typegen && tsc --noEmit",
     "test:integration": "node --experimental-strip-types tests/integration.mjs"
   },
   "dependencies": {
