@@ -41,3 +41,12 @@ test('mutations reject cross-origin, missing-origin and null-origin browser requ
     assert.throws(() => assertSameOrigin(new Request('https://example.com/api', { method:'POST', headers: origin ? {origin} : {} })));
   }
 });
+
+test('trusted Node proxy IP ignores forged Cloudflare IP and separates real clients', async () => {
+  const {readClientIp}=await import('../lib/server/auth.ts');
+  const a=new Request('https://kittakat.duckdns.org/api/auth/login',{headers:{'x-real-ip':'203.0.113.10','cf-connecting-ip':'198.51.100.99'}});
+  const b=new Request(a.url,{headers:{'x-real-ip':'203.0.113.11','cf-connecting-ip':'198.51.100.99'}});
+  assert.equal(readClientIp(a,'x-real-ip'),'203.0.113.10');
+  assert.equal(readClientIp(b,'x-real-ip'),'203.0.113.11');
+  assert.equal(readClientIp(new Request(a.url,{headers:{'cf-connecting-ip':'198.51.100.99'}}),'x-real-ip'),'local');
+});

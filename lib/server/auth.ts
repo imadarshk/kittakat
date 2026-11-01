@@ -73,3 +73,9 @@ export function assertSameOrigin(request:Request):void {
     throw new ApiError(403, 'This request must come from the same site.');
   }
 }
+
+/** The selected header must be overwritten by the trusted hosting proxy. */
+export function readClientIp(request:Request, headerName='cf-connecting-ip'):string {
+  const value=request.headers.get(headerName)?.trim();
+  return value && value.length<=45 && /^[0-9a-fA-F:.]+$/.test(value) ? value : 'local';
+}

@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { getChatGPTUser } from '../../chatgpt-auth';
 import { LedgerService } from '../../../lib/server/service';
-import { ApiError, assertSameOrigin, readSessionToken, sessionCookie } from '../../../lib/server/auth';
+import { ApiError, assertSameOrigin, readClientIp, readSessionToken, sessionCookie } from '../../../lib/server/auth';
 import { csvExport, xlsxExport } from '../../../lib/exports';
 import type { ExportKind, User } from '../../../lib/types';
 
@@ -47,7 +47,7 @@ async function handle(request:Request):Promise<Response> {
     if (request.method==='POST') {
       assertSameOrigin(request);
       const body=await readBody(request);
-      const ip=request.headers.get('cf-connecting-ip')||'local';
+      const ip=readClientIp(request,env.CLIENT_IP_HEADER);
       if (segments.length===2&&segments[0]==='auth') {
         if (segments[1]==='register'||segments[1]==='login') {
           const result=segments[1]==='register'?await service.register(body,ip):await service.login(body,ip);

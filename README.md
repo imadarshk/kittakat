@@ -50,6 +50,10 @@ npm run test:integration
 
 The integration test creates disposable accounts and spaces in the local database. It refuses remote URLs. Set `KITTAKAT_TEST_URL` to the local preview URL if it uses another port. It never seeds a production deployment.
 
+## Deploy to Yeti Cloud or another Node server
+
+Use Node.js 24, `npm ci --include=dev`, `npm run build:node`, then `npm start`. The default port is 8080. This target stores accounts and expenses in a private SQLite file, applies pending migrations automatically, and disables ChatGPT sign-in. Set `KITTAKAT_DB_PATH` to persistent storage outside the deployment directory before accepting real accounts. See [Yeti Cloud deployment and backup guide](docs/yeti-cloud.md) for proxy, HTTPS, persistence, and update settings.
+
 ## Deploy the GitHub version to Cloudflare
 
 This is a full-stack application, so GitHub Pages alone cannot host its login and database. The repository is ready to deploy as a Cloudflare Worker with D1.
