@@ -50,6 +50,12 @@ npm run test:integration
 
 The integration test creates disposable accounts and spaces in the local database. It refuses remote URLs. Set `KITTAKAT_TEST_URL` to the local preview URL if it uses another port. It never seeds a production deployment.
 
+## Deploy on a Node.js server
+
+The native server version uses Node.js 24, a Next.js production build and persistent SQLite. Set `KITTAKAT_PUBLIC_ORIGIN` to the public HTTPS origin and `KITTAKAT_DB_PATH` to an absolute private database file outside the application release. Run `npm ci`, then `npm run build:server`. Package `.next/standalone` together with `public`, `drizzle` and `.next/static`, and run its `server.js` under a process manager. Database migrations apply atomically on the first database access.
+
+See [Yeti hosting and recovery](docs/yeti-hosting.md) for production settings, proxy trust, validated backups and restore instructions. The original `npm start` command is the Worker development emulator; use the native standalone server for Yeti hosting.
+
 ## Deploy the GitHub version to Cloudflare
 
 This is a full-stack application, so GitHub Pages alone cannot host its login and database. The repository is ready to deploy as a Cloudflare Worker with D1.
