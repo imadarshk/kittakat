@@ -1,0 +1,11 @@
+# Native server hosting
+
+Node.js 24 runs a Next.js production build with native SQLite. The Worker build remains available using the original commands.
+
+Set `KITTAKAT_DB_PATH` to an absolute private database path outside the release directory and `KITTAKAT_PUBLIC_ORIGIN` to the exact public HTTPS origin. Set `KITTAKAT_MIGRATIONS_DIR` to the release's `drizzle` directory. Never enable ChatGPT header authentication on this server. The Node adapter always disables it. The current adapter trusts Yeti's shared load balancer's `x-real-ip` header for throttling, and ignores client-provided Cloudflare identity headers. Reassess proxy trust if changing to direct public-IP access or another hosting provider.
+
+Build with `npm ci` and `npm run build:server`. Copy `public`, `drizzle`, and `.next/static` into the corresponding locations in `.next/standalone` before packaging. Run the standalone `server.js` with `NODE_ENV=production`, `HOSTNAME=0.0.0.0` and `PORT=3000` under Yeti's PM2 process manager. Run one application process against the database. SQL batches execute synchronously within `BEGIN IMMEDIATE`/`COMMIT`, with full rollback on failure. Migrations apply atomically on the first database access; previously applied SQL files must retain their SHA256 checksums.
+
+Back up before deploying a migration. Use `KITTAKAT_DB_PATH=/absolute/path node scripts/backup-server.mjs`. It uses SQLite's online backup API, checks database and foreign-key integrity, and publishes the backup only after validation. Backups contain private financial records and credential hashes: keep their directory private and copy encrypted backups off the server for protection from provider or disk failure. Local server backups alone do not provide disaster recovery. No off-server destination has been authorized in this deployment.
+
+To restore, stop the app, preserve the entire current database directory (including WAL and SHM files), restore a validated snapshot to the configured database path, set the file to mode 600, and restart. Never copy only the main database file while the app is running. Never overwrite production records with integration-test data.

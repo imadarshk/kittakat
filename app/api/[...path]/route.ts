@@ -4,6 +4,7 @@ import { LedgerService } from '../../../lib/server/service';
 import { ApiError, assertSameOrigin, readSessionToken, sessionCookie } from '../../../lib/server/auth';
 import { csvExport, xlsxExport } from '../../../lib/exports';
 import type { ExportKind, User } from '../../../lib/types';
+import { normalizeServerRequest, clientAddress } from '../../../lib/server/request';
 
 export const dynamic = 'force-dynamic';
 const json = (data:unknown,status=200,headers:HeadersInit={}) => Response.json(data,{status,headers:{'Cache-Control':'no-store','Vary':'Cookie',...headers}});
@@ -30,6 +31,7 @@ async function readBody(request:Request):Promise<Record<string,unknown>> {
 
 async function handle(request:Request):Promise<Response> {
   try {
+    request=normalizeServerRequest(request,env.PUBLIC_ORIGIN);
     const url=new URL(request.url);
     const segments=url.pathname.replace(/^\/api\/?/,'').split('/').filter(Boolean);
     const chatgptEnabled=env.ENABLE_CHATGPT_AUTH==='true';
@@ -47,7 +49,7 @@ async function handle(request:Request):Promise<Response> {
     if (request.method==='POST') {
       assertSameOrigin(request);
       const body=await readBody(request);
-      const ip=request.headers.get('cf-connecting-ip')||'local';
+      const ip=clientAddress(request,env.TRUST_YETI_PROXY==='true');
       if (segments.length===2&&segments[0]==='auth') {
         if (segments[1]==='register'||segments[1]==='login') {
           const result=segments[1]==='register'?await service.register(body,ip):await service.login(body,ip);
