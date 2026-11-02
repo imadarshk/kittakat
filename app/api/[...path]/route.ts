@@ -4,12 +4,13 @@ import { LedgerService } from '../../../lib/server/service';
 import { ApiError, assertSameOrigin, readClientIp, readSessionToken, sessionCookie } from '../../../lib/server/auth';
 import { csvExport, xlsxExport } from '../../../lib/exports';
 import type { ExportKind, User } from '../../../lib/types';
+import { MAX_ENTRY_BODY_BYTES } from '../../../lib/expense-photos';
 
 export const dynamic = 'force-dynamic';
 const json = (data:unknown,status=200,headers:HeadersInit={}) => Response.json(data,{status,headers:{'Cache-Control':'no-store','Vary':'Cookie',...headers}});
 const EXPORT_KINDS:ExportKind[] = ['expenses','splits','repayments','balances','history'];
 
-async function readBody(request:Request):Promise<Record<string,unknown>> {
+async function readBody(request:Request,maxBytes=65536):Promise<Record<string,unknown>> {
   if (!request.headers.get('content-type')?.toLowerCase().startsWith('application/json')) throw new ApiError(415,'Send a JSON request body.');
   const reader=request.body?.getReader();
   if (!reader) throw new ApiError(400,'A JSON request body is required.');
@@ -18,7 +19,7 @@ async function readBody(request:Request):Promise<Record<string,unknown>> {
     const {done,value}=await reader.read();
     if (done) break;
     size+=value.byteLength;
-    if (size>65536) { await reader.cancel(); throw new ApiError(413,'Request body is too large.'); }
+    if (size>maxBytes) { await reader.cancel(); throw new ApiError(413,'Request body is too large.'); }
     text+=decoder.decode(value,{stream:true});
   }
   text+=decoder.decode();
@@ -44,9 +45,18 @@ async function handle(request:Request):Promise<Response> {
     if (request.method==='GET'&&segments.length===1&&segments[0]==='bootstrap') {
       return json(await service.bootstrap(user,url.searchParams.get('spaceId')||undefined,chatgptEnabled));
     }
+    if (request.method==='GET'&&segments.length===6&&segments[0]==='spaces'&&segments[2]==='entries'&&segments[4]==='photos') {
+      if (!user) throw new ApiError(401,'Sign in to view photos.');
+      const photo=await service.readExpensePhoto(user,segments[1],segments[3],segments[5]);
+      return new Response(new Uint8Array(photo.bytes).buffer,{headers:{
+        'Content-Type':photo.mediaType,'Content-Disposition':`inline; filename="expense-photo.${photo.mediaType==='image/png'?'png':'jpg'}"`,
+        'Cache-Control':'private, no-store','Vary':'Cookie','X-Content-Type-Options':'nosniff','Cross-Origin-Resource-Policy':'same-origin',
+      }});
+    }
     if (request.method==='POST') {
       assertSameOrigin(request);
-      const body=await readBody(request);
+      const entryMutation=segments[0]==='spaces'&&segments[2]==='entries'&&(segments.length===3||(segments.length===5&&segments[4]==='revise'));
+      const body=await readBody(request,entryMutation?MAX_ENTRY_BODY_BYTES:65536);
       const ip=readClientIp(request,env.CLIENT_IP_HEADER);
       if (segments.length===2&&segments[0]==='auth') {
         if (segments[1]==='register'||segments[1]==='login') {

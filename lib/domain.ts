@@ -1,5 +1,6 @@
 import type { ExpenseInput, ExpensePayload, RepaymentInput, RepaymentPayload, Entry, Balance, PersonalDebt, Review, Dispute, Member } from './types.ts';
 import { CATEGORIES } from './types.ts';
+import { MAX_DESCRIPTION_LENGTH } from './expense-photos.ts';
 
 const MAX = BigInt(Number.MAX_SAFE_INTEGER);
 function safeNumber(value:bigint):number {
@@ -52,6 +53,7 @@ function allocate(amount:number, weights:bigint[]):number[] {
 export function splitExpense(input:ExpenseInput):ExpensePayload {
   if(!input || input.kind!=='expense') throw new Error('Expense input is required.');
   const cleanTitle=title(input.title);
+  if (input.description!==undefined && (typeof input.description!=='string' || input.description.length>MAX_DESCRIPTION_LENGTH)) throw new Error('Description must be text with at most 4,000 characters.');
   money(input.amountCents,true); date(input.date); id(input.paidById);
   if(!CATEGORIES.some(category=>category===input.category)) throw new Error('Choose a valid category.');
   if(!Array.isArray(input.participantIds) || !input.participantIds.length) throw new Error('Select at least one participant.');
@@ -85,7 +87,7 @@ export function splitExpense(input:ExpenseInput):ExpensePayload {
       values=allocate(input.amountCents,parts.map(part=>part.units*10n**BigInt(scale-part.scale)));
     }
   }
-  return {kind:'expense',title:cleanTitle,amountCents:input.amountCents,category:input.category,date:input.date,paidById:input.paidById,participantIds:people,splitMethod:input.splitMethod,splitValues:{...input.splitValues},portions:Object.fromEntries(people.map((person,i)=>[person,values[i]]))};
+  return {kind:'expense',title:cleanTitle,...(input.description===undefined?{}:{description:input.description.trim()}),amountCents:input.amountCents,category:input.category,date:input.date,paidById:input.paidById,participantIds:people,splitMethod:input.splitMethod,splitValues:{...input.splitValues},portions:Object.fromEntries(people.map((person,i)=>[person,values[i]]))};
 }
 
 export function validateRepayment(input:RepaymentInput):RepaymentPayload {

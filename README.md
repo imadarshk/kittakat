@@ -10,6 +10,7 @@
 - Create independent NPR spaces. Invite members with a secret code or shared link; replace an invitation code when needed.
 - Space creators can add a named person from **People → Add a person without an account**. These people appear as **No account** and participate in all splits, payers, balances, repayments and reports. They cannot sign in, accept or dispute entries, and never hold up a review. Other account holders in the space can record expenses and repayments involving them.
 - Record title, amount, date, common category, payer, and Everyone or Specific people.
+- Add an optional expense description and up to four photos. The form accepts JPEG, PNG and WebP originals up to 20 MiB each, then resizes/compresses them for storage. Open an expense and expand **Description & photos** to see the actual photos inline and who added each one. Space membership is required to view a photo.
 - Split equally, by exact amounts, percentages, or shares. Integer paisa and deterministic largest-remainder allocation preserve every paisa.
 - See what each person owes you and what you owe each person, with supporting expense records.
 - Expenses and repayments affect balances immediately. Involved account holders can accept or dispute with a reason.
@@ -78,6 +79,8 @@ Settings provides CSV downloads for expenses, individual portions, repayments, b
 XLSX monetary values whose paisa integers exceed 15 digits are exported as exact decimal text to preserve every paisa in Excel. Ordinary amounts remain numeric. Spreadsheet formulas treat these exceptional large values as text.
 
 No destructive entry deletion is provided. Correct an entry to create a new immutable revision. Disputed amounts stay included and visibly flagged; acceptance never applies the amount twice.
+
+Descriptions and photos follow the same correction history. Removing a photo from the current revision preserves the original photo in earlier versions. Description text and photo names/uploader names are included in expense reports; image bodies stay out of bootstrap and export payloads. Photos are stored privately in the same database, so database backups also preserve attachments. The additive `0003_expense_photos.sql` migration must be applied with the other pending migrations on Cloudflare; the Node target applies it automatically at startup.
 
 Database triggers also enforce append-only financial revisions and audit events. They reject updates, deletions, and SQLite replacement conflicts, including explicit rowid conflicts. An entry cannot move between spaces, change its original creator or creation timestamp, or point to a missing/skipped revision. See [Data integrity and recovery](docs/data-integrity.md) for the trust boundary, verification, and recovery procedure.
 

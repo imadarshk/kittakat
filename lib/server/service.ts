@@ -1,6 +1,8 @@
 import { splitExpense, validateRepayment, calculateBalances, personalDebts } from '../domain.ts';
 import type { Bootstrap, User, Space, Member, Entry, EntryPayload, Review, Dispute, Notice, Revision, ExportData } from '../types.ts';
 import { ApiError, hashPassword, verifyPassword, normalizeUsername, validatePassword, randomToken, hashToken, SESSION_SECONDS } from './auth.ts';
+import { validatePhotoUpload, MAX_EXPENSE_PHOTOS } from '../expense-photos.ts';
+import type { ExpensePhoto } from '../types.ts';
 
 export interface SqlStatement {
   bind(...values:unknown[]):SqlStatement;
@@ -16,6 +18,8 @@ interface UserRow { id:string; username:string; display_name:string; auth_type:U
 interface SpaceRow { id:string; name:string; owner_id:string; code:string; currency:'NPR'; created_at:string }
 interface EntryRow { id:string; space_id:string; creator_id:string; revision:number; created_at:string }
 interface RevisionRow { entry_id:string; revision:number; payload_json:string; reason:string; actor_id:string; created_at:string }
+interface PhotoRow { id:string;space_id:string;entry_id:string;uploaded_by_id:string;file_name:string;media_type:ExpensePhoto['mediaType'];data_base64:string;created_at:string }
+const photoView=(row:PhotoRow):ExpensePhoto=>({id:row.id,fileName:row.file_name,mediaType:row.media_type,uploadedById:row.uploaded_by_id,createdAt:row.created_at});
 const userView = (r:UserRow):User => ({id:r.id,username:r.username,displayName:r.display_name,authType:r.auth_type});
 const spaceView = (r:SpaceRow):Space => ({id:r.id,name:r.name,ownerId:r.owner_id,code:r.code,currency:r.currency,createdAt:r.created_at});
 const revisionView = (r:RevisionRow):Revision => ({revision:r.revision,payload:JSON.parse(r.payload_json),reason:r.reason,actorId:r.actor_id,createdAt:r.created_at});
@@ -244,6 +248,37 @@ export class LedgerService {
     return payload;
   }
   private involved(payload:EntryPayload):string[] { return [...new Set(payload.kind==='expense'?[payload.paidById,...payload.participantIds]:[payload.fromId,payload.toId])]; }
+  private async preparePhotos(user:User,spaceId:string,entryId:string,payload:EntryPayload,body:unknown,previous?:EntryPayload):Promise<SqlStatement[]> {
+    if (payload.kind!=='expense') return [];
+    const input=object(body);
+    if (input.description===undefined && previous?.kind==='expense' && previous.description!==undefined) payload.description=previous.description;
+    const values=input.photos===undefined?(previous?.kind==='expense'?previous.photos??[]:[]):input.photos;
+    if (!Array.isArray(values) || values.length>MAX_EXPENSE_PHOTOS) throw new ApiError(400,'Attach at most four photos.');
+    const photos:ExpensePhoto[]=[],statements:SqlStatement[]=[];
+    for (const value of values) {
+      const photo=object(value);
+      if (Object.hasOwn(photo,'id')) {
+        if (typeof photo.id!=='string' || photos.some(p=>p.id===photo.id)) throw new ApiError(400,'Choose distinct existing photos.');
+        const existing=await this.stmt('SELECT * FROM expense_photos WHERE id=? AND space_id=? AND entry_id=?',photo.id,spaceId,entryId).first<PhotoRow>();
+        if (!existing) throw new ApiError(400,'Photo does not belong to this expense.');
+        photos.push(photoView(existing));
+      } else {
+        let upload;
+        try { upload=validatePhotoUpload(photo); } catch(error) { throw new ApiError(400,error instanceof Error?error.message:'Invalid photo.'); }
+        const saved:ExpensePhoto={id:id(),fileName:upload.fileName,mediaType:upload.mediaType,uploadedById:user.id,createdAt:this.now()};
+        photos.push(saved);
+        statements.push(this.stmt('INSERT INTO expense_photos (id,space_id,entry_id,uploaded_by_id,file_name,media_type,data_base64,created_at) VALUES (?,?,?,?,?,?,?,?)',saved.id,spaceId,entryId,user.id,saved.fileName,saved.mediaType,upload.dataBase64,saved.createdAt));
+      }
+    }
+    if (photos.length || input.photos!==undefined || (previous?.kind==='expense'&&previous.photos!==undefined)) payload.photos=photos;
+    return statements;
+  }
+  async readExpensePhoto(user:User,spaceId:string,entryId:string,photoId:string):Promise<{bytes:Uint8Array;mediaType:ExpensePhoto['mediaType'];fileName:string}> {
+    await this.membership(user,spaceId);
+    const row=await this.stmt('SELECT * FROM expense_photos WHERE id=? AND space_id=? AND entry_id=?',photoId,spaceId,entryId).first<PhotoRow>();
+    if (!row) throw new ApiError(404,'Photo not found in this expense.');
+    return {bytes:Uint8Array.from(atob(row.data_base64),c=>c.charCodeAt(0)),mediaType:row.media_type,fileName:row.file_name};
+  }
   private async reviewers(spaceId:string,people:string[]):Promise<string[]> {
     const real=new Set((await this.members(spaceId)).filter(member=>member.authType!=='dummy').map(member=>member.id));
     return people.filter(person=>real.has(person));
@@ -257,9 +292,11 @@ export class LedgerService {
   async createEntry(user:User,spaceId:string,body:unknown):Promise<string> {
     await this.membership(user,spaceId);
     const payload=await this.payload(spaceId,body); const entryId=id(); const involved=await this.reviewers(spaceId,this.involved(payload)); const now=this.now();
+    const photoStatements=await this.preparePhotos(user,spaceId,entryId,payload,body);
     const version=await this.financialVersion(spaceId,payload);
     await this.atomicFinancial(spaceId,version,[
       this.stmt('INSERT INTO entries (id,space_id,creator_id,revision,created_at) VALUES (?,?,?,1,?)',entryId,spaceId,user.id,now),
+      ...photoStatements,
       this.stmt('INSERT INTO revisions (entry_id,revision,payload_json,reason,actor_id,created_at) VALUES (?,1,?,?,?,?)',entryId,JSON.stringify(payload),'Created',user.id,now),
       ...[...new Set([...involved,user.id])].map(person=>this.reviewRow(entryId,1,person,user.id)),
       ...involved.filter(person=>person!==user.id).map(person=>this.notice(spaceId,entryId,1,person,user.id,'added')),
@@ -279,10 +316,13 @@ export class LedgerService {
     if (!Number.isSafeInteger(expected)||Number(expected)<1) throw new ApiError(400,'A current expected revision is required.');
     if (expected!==row.revision) throw new ApiError(409,'This entry changed. Refresh before correcting it.');
     const reason=textField(input.reason,'Correction reason',2000); const payload=await this.payload(spaceId,input);
+    const snapshot=await this.stmt('SELECT payload_json FROM revisions WHERE entry_id=? AND revision=?',entryId,row.revision).first<{payload_json:string}>();
+    const photoStatements=await this.preparePhotos(user,spaceId,entryId,payload,input,snapshot?JSON.parse(snapshot.payload_json):undefined);
     const version=await this.financialVersion(spaceId,payload,entryId);
     const previous=await this.all<{user_id:string}>('SELECT DISTINCT user_id FROM reviews WHERE entry_id=?',entryId);
     const involved=await this.reviewers(spaceId,[...new Set([...previous.map(r=>r.user_id),...this.involved(payload),row.creator_id])]); const revision=row.revision+1;
     await this.atomicEntry(entryId,spaceId,row.revision,[
+      ...photoStatements,
       this.stmt('INSERT INTO revisions (entry_id,revision,payload_json,reason,actor_id,created_at) VALUES (?,?,?,?,?,?)',entryId,revision,JSON.stringify(payload),reason,user.id,this.now()),
       this.stmt('UPDATE entries SET revision=? WHERE id=? AND space_id=? AND revision=?',revision,entryId,spaceId,row.revision),
       ...involved.map(person=>this.reviewRow(entryId,revision,person,user.id)),

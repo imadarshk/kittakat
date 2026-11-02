@@ -24,11 +24,11 @@ function table(kind:ExportKind,data:ExportData):Table {
   const entries=data.entries.filter(entry=>inRange(entry.payload.date));
   let rows:Cell[][];
   if(kind==='expenses') {
-    rows=[['Entry ID','Date','Title','Category','Paid by','Amount (NPR)','Split method','Participants','Status','Revision']];
+    rows=[['Entry ID','Date','Title','Category','Paid by','Amount (NPR)','Split method','Participants','Status','Revision','Description','Photos']];
     for(const entry of entries) {
       const p=entry.payload;
       if(p.kind!=='expense') continue;
-      rows.push([entry.id,p.date,p.title,p.category,name(p.paidById),{cents:p.amountCents},p.splitMethod,p.participantIds.map(name).join('; '),entryStatus(entry,data.reviews,data.disputes,data.members),entry.revision]);
+      rows.push([entry.id,p.date,p.title,p.category,name(p.paidById),{cents:p.amountCents},p.splitMethod,p.participantIds.map(name).join('; '),entryStatus(entry,data.reviews,data.disputes,data.members),entry.revision,p.description??'',(p.photos??[]).map(photo=>`${photo.fileName} (added by ${name(photo.uploadedById)})`).join('; ')]);
     }
   } else if(kind==='splits') {
     rows=[['Entry ID','Date','Title','Member ID','Member','Share (NPR)','Paid by','Split method']];
