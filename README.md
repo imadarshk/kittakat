@@ -8,10 +8,11 @@
 
 - Create a username and password without email verification, then use those credentials to log in.
 - Create independent NPR spaces. Invite members with a secret code or shared link; replace an invitation code when needed.
+- Space creators can add a named person from **People → Add a person without an account**. These people appear as **No account** and participate in all splits, payers, balances, repayments and reports. They cannot sign in, accept or dispute entries, and never hold up a review. Other account holders in the space can record expenses and repayments involving them.
 - Record title, amount, date, common category, payer, and Everyone or Specific people.
 - Split equally, by exact amounts, percentages, or shares. Integer paisa and deterministic largest-remainder allocation preserve every paisa.
 - See what each person owes you and what you owe each person, with supporting expense records.
-- Expenses and repayments affect balances immediately. Involved members can accept or dispute with a reason.
+- Expenses and repayments affect balances immediately. Involved account holders can accept or dispute with a reason.
 - Disputes notify the creator and everyone involved. Corrections require an explanation, preserve earlier revisions, and remain under review until each disputing person accepts a later revision.
 - Notifications in the main navigation; Excel/CSV reports, create/join spaces and invitations inside Settings.
 - Motion and quiet interface sounds, with reduced-motion support and a sound preference.

@@ -28,7 +28,7 @@ function table(kind:ExportKind,data:ExportData):Table {
     for(const entry of entries) {
       const p=entry.payload;
       if(p.kind!=='expense') continue;
-      rows.push([entry.id,p.date,p.title,p.category,name(p.paidById),{cents:p.amountCents},p.splitMethod,p.participantIds.map(name).join('; '),entryStatus(entry,data.reviews,data.disputes),entry.revision]);
+      rows.push([entry.id,p.date,p.title,p.category,name(p.paidById),{cents:p.amountCents},p.splitMethod,p.participantIds.map(name).join('; '),entryStatus(entry,data.reviews,data.disputes,data.members),entry.revision]);
     }
   } else if(kind==='splits') {
     rows=[['Entry ID','Date','Title','Member ID','Member','Share (NPR)','Paid by','Split method']];
@@ -42,7 +42,7 @@ function table(kind:ExportKind,data:ExportData):Table {
     for(const entry of entries) {
       const p=entry.payload;
       if(p.kind!=='repayment') continue;
-      rows.push([entry.id,p.date,p.title,name(p.fromId),name(p.toId),{cents:p.amountCents},entryStatus(entry,data.reviews,data.disputes),entry.revision]);
+      rows.push([entry.id,p.date,p.title,name(p.fromId),name(p.toId),{cents:p.amountCents},entryStatus(entry,data.reviews,data.disputes,data.members),entry.revision]);
     }
   } else if(kind==='balances') {
     rows=[['Member ID','Member','Paid (NPR, all-time)','Own share (NPR, all-time)','Net balance (NPR, all-time)','Period']];

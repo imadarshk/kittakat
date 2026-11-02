@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { calculateBalances } from '../lib/domain.ts';
+import { calculateBalances, entryStatus, personalDebts } from '../lib/domain.ts';
 
 const origin=process.env.KITTAKAT_TEST_URL||'http://127.0.0.1:5173';
 if(!['127.0.0.1','localhost','[::1]'].includes(new URL(origin).hostname))throw new Error('Integration tests create disposable accounts and must target loopback only.');
@@ -7,6 +7,7 @@ let checks=0;const check=(value,message)=>{assert.ok(value,message);checks++;};
 function client(){const cookies=new Map();return {async request(path,body,expected=200,extra={}){const response=await fetch(origin+path,{method:body===undefined?'GET':'POST',headers:{Origin:origin,...(body===undefined?{}:{'Content-Type':'application/json'}),Cookie:[...cookies].map(([k,v])=>k+'='+v).join('; '),...extra},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(30000)});for(const cookie of response.headers.getSetCookie()){const pair=cookie.split(';')[0],index=pair.indexOf('=');cookies.set(pair.slice(0,index),pair.slice(index+1));}assert.equal(response.status,expected,`${path}: ${response.status} expected ${expected}; ${response.status>=400?await response.clone().text():''}`);checks++;if(response.headers.get('content-type')?.includes('application/json'))return response.json();return response;}};}
 const suffix=Date.now().toString(36),a=client(),b=client(),c=client();
 check((await a.request('/api/bootstrap')).user===null,'Anonymous bootstrap has no user.');
+await a.request('/api/spaces/unknown/members',{displayName:'Guest'},401);
 await a.request('/api/auth/register',{username:'qa_a_'+suffix,password:'QA-only-password-27',displayName:'आशा'});
 await b.request('/api/auth/register',{username:'qa_b_'+suffix,password:'QA-only-password-27',displayName:'बिनिता'});
 await c.request('/api/auth/register',{username:'qa_c_'+suffix,password:'QA-only-password-27',displayName:'चिराग'});
@@ -54,6 +55,36 @@ const paidBalances=await getBalances();await b.request(`/api/spaces/${spaceId}/e
 await b.request(`/api/spaces/${otherSpaceId}/entries/${entryId}/review`,{revision:2,action:'accept'},403);
 const csv=await a.request(`/api/spaces/${spaceId}/export?format=csv&type=expenses`);check((await csv.text()).includes('Corrected rounding'),'CSV includes persisted records.');
 const xlsx=await a.request(`/api/spaces/${spaceId}/export?format=xlsx`);const bytes=new Uint8Array(await xlsx.arrayBuffer());check(bytes[0]===80&&bytes[1]===75&&bytes.length>1000,'Excel download is a real XLSX ZIP.');
+// People without accounts use the same ledger and skip only authentication/review.
+const {id:dummySpace}=await a.request('/api/spaces',{name:'QA account-free '+suffix});
+let dummyState=await a.request('/api/bootstrap?spaceId='+dummySpace);
+await b.request('/api/spaces/join',{code:dummyState.activeSpace.code});
+await b.request(`/api/spaces/${dummySpace}/members`,{displayName:'Forbidden'},403);
+await c.request(`/api/spaces/${dummySpace}/members`,{displayName:'Forbidden'},403);
+await a.request(`/api/spaces/${dummySpace}/members`,{displayName:'  '},400);
+const {id:guest}=await a.request(`/api/spaces/${dummySpace}/members`,{displayName:'  बिना खाता  ',authType:'password',role:'owner'});
+dummyState=await a.request('/api/bootstrap?spaceId='+dummySpace);
+const dummy=dummyState.members.find(m=>m.id===guest);
+check(dummy?.authType==='dummy'&&dummy.role==='member'&&dummy.displayName==='बिना खाता','Owner creates a dummy identity with no account, ignoring forged role/auth fields.');
+const dummyExpense={...input,paidById:guest,participantIds:[ua.id,ub.id,guest]};
+const {id:dummyEntry}=await b.request(`/api/spaces/${dummySpace}/entries`,dummyExpense);
+dummyState=await a.request('/api/bootstrap?spaceId='+dummySpace);
+check(dummyState.reviews.every(r=>r.userId!==guest),'Dummy people never get review requests.');
+check(entryStatus(dummyState.entries[0],dummyState.reviews,dummyState.disputes,dummyState.members)==='Pending review','Real participants must still review.');
+await a.request(`/api/spaces/${dummySpace}/entries/${dummyEntry}/review`,{revision:1,action:'accept'});
+dummyState=await a.request('/api/bootstrap?spaceId='+dummySpace);
+check(entryStatus(dummyState.entries[0],dummyState.reviews,dummyState.disputes,dummyState.members)==='Accepted','Dummy payer does not hold up acceptance.');
+await b.request(`/api/spaces/${dummySpace}/entries/${dummyEntry}/revise`,{...dummyExpense,expectedRevision:1,reason:'Corrected amount',amountCents:9000});
+await a.request(`/api/spaces/${dummySpace}/entries/${dummyEntry}/review`,{revision:2,action:'accept'});
+await a.request(`/api/spaces/${dummySpace}/entries`,{kind:'repayment',amountCents:1000,date:'2026-11-02',fromId:ua.id,toId:guest});
+dummyState=await a.request('/api/bootstrap?spaceId='+dummySpace);
+check(dummyState.entries.every(e=>entryStatus(e,dummyState.reviews,dummyState.disputes,dummyState.members)==='Accepted'),'Corrections and repayments exclude dummy reviews.');
+check(personalDebts(ua.id,dummyState.members.map(m=>m.id),dummyState.entries).find(d=>d.userId===guest)?.youOweCents===2000,'Repayment to a dummy reduces the same pairwise debt.');
+await a.request(`/api/spaces/${otherSpaceId}/entries`,{...input,paidById:guest,participantIds:[ua.id]},400);
+const dummyCsv=await a.request(`/api/spaces/${dummySpace}/export?format=csv&type=expenses`);
+check((await dummyCsv.text()).includes('बिना खाता,90.00,equal') ,'Exports retain dummy payer names.');
+const dummyXlsx=await a.request(`/api/spaces/${dummySpace}/export?format=xlsx`);
+check(new TextDecoder().decode(await dummyXlsx.arrayBuffer()).includes('बिना खाता'),'Excel includes dummy identities.');
 await a.request('/api/auth/logout',{});check((await a.request('/api/bootstrap')).user===null,'Logout clears the session.');await a.request('/api/spaces',{name:'Forbidden'},401);
 await a.request('/api/auth/login',{username:'qa_a_'+suffix,password:'wrong-password'},401);await a.request('/api/auth/login',{username:'qa_a_'+suffix,password:'QA-only-password-27'});check((await a.request('/api/bootstrap')).user.id===ua.id,'Username/password login restores the account.');
-console.log(`HTTP integration passed ${checks} checks: accounts, isolation, codes, four splits, review/correction, removed participants, repayments, exports and logout.`);
+console.log(`HTTP integration passed ${checks} checks: accounts, isolation, codes, four splits, review/correction, removed participants, repayments, exports, dummy members and logout.`);
