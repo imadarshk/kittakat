@@ -3,7 +3,7 @@ import { sql } from 'drizzle-orm';
 
 export const users = sqliteTable('users', {
   id:text('id').primaryKey(), username:text('username').notNull().unique(), displayName:text('display_name').notNull(),
-  authType:text('auth_type', {enum:['password','chatgpt']}).notNull(), passwordHash:text('password_hash'),
+  authType:text('auth_type', {enum:['password','chatgpt','dummy']}).notNull(), passwordHash:text('password_hash'),
   chatgptId:text('chatgpt_id').unique(), createdAt:text('created_at').notNull(),
 });
 export const sessions = sqliteTable('sessions', {

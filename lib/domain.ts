@@ -1,4 +1,4 @@
-import type { ExpenseInput, ExpensePayload, RepaymentInput, RepaymentPayload, Entry, Balance, PersonalDebt, Review, Dispute } from './types.ts';
+import type { ExpenseInput, ExpensePayload, RepaymentInput, RepaymentPayload, Entry, Balance, PersonalDebt, Review, Dispute, Member } from './types.ts';
 import { CATEGORIES } from './types.ts';
 
 const MAX = BigInt(Number.MAX_SAFE_INTEGER);
@@ -147,14 +147,15 @@ export function personalDebts(viewerId:string,memberIds:string[],entries:Entry[]
   });
 }
 
-export function entryStatus(entry:Entry,reviews:Review[],disputes:Dispute[]):string {
+export function entryStatus(entry:Entry,reviews:Review[],disputes:Dispute[],members:Pick<Member,'id'|'authType'>[]=[]):string {
   const current=reviews.filter(review=>review.entryId===entry.id && review.revision===entry.revision);
   const unresolved=disputes.filter(dispute=>dispute.entryId===entry.id && dispute.openedRevision<=entry.revision && (dispute.resolvedRevision===null || dispute.resolvedRevision>entry.revision));
   if(unresolved.some(dispute=>dispute.openedRevision===entry.revision) || current.some(review=>review.status==='disputed')) return 'Disputed';
   if(unresolved.length) return 'Correction under review';
   const p=entry.payload;
   const involved=p.kind==='expense' ? new Set([p.paidById,...p.participantIds]) : new Set([p.fromId,p.toId]);
-  if([...involved].every(userId=>current.some(review=>review.userId===userId && review.status==='accepted')) && !current.some(review=>review.status==='pending')) return 'Accepted';
+  const exempt=new Set(members.filter(member=>member.authType==='dummy').map(member=>member.id));
+  if([...involved].every(userId=>exempt.has(userId) || current.some(review=>review.userId===userId && review.status==='accepted')) && !current.some(review=>review.status==='pending')) return 'Accepted';
   return 'Pending review';
 }
 

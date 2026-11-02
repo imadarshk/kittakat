@@ -63,6 +63,7 @@ async function handle(request:Request):Promise<Response> {
         if (segments.length===1) return json({id:await service.createSpace(user,body.name)});
         if (segments.length===2&&segments[1]==='join') return json({id:await service.joinSpace(user,body.code)});
         const spaceId=segments[1];
+        if (segments.length===3&&segments[2]==='members') return json({id:await service.addDummyMember(user,spaceId,body.displayName)});
         if (segments.length===3&&segments[2]==='code') { await service.rotateCode(user,spaceId); return json({ok:true}); }
         if (segments.length===3&&segments[2]==='entries') return json({id:await service.createEntry(user,spaceId,body)});
         if (segments.length===5&&segments[2]==='entries') {

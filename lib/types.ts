@@ -1,6 +1,6 @@
 export type SplitMethod = 'equal' | 'exact' | 'percent' | 'shares';
 export type ReviewStatus = 'pending' | 'accepted' | 'disputed';
-export interface User { id:string; username:string; displayName:string; authType:'password'|'chatgpt' }
+export interface User { id:string; username:string; displayName:string; authType:'password'|'chatgpt'|'dummy' }
 export interface Space { id:string; name:string; ownerId:string; code:string; currency:'NPR'; createdAt:string }
 export interface Member extends User { role:'owner'|'member'; joinedAt:string }
 export interface ExpenseInput { kind:'expense'; title:string; amountCents:number; category:string; date:string; paidById:string; participantIds:string[]; splitMethod:SplitMethod; splitValues:Record<string,number> }

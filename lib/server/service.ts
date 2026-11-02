@@ -12,7 +12,7 @@ export interface SqlDatabase {
   prepare(sql:string):SqlStatement;
   batch(statements:SqlStatement[]):Promise<unknown>;
 }
-interface UserRow { id:string; username:string; display_name:string; auth_type:'password'|'chatgpt'; password_hash:string|null }
+interface UserRow { id:string; username:string; display_name:string; auth_type:User['authType']; password_hash:string|null }
 interface SpaceRow { id:string; name:string; owner_id:string; code:string; currency:'NPR'; created_at:string }
 interface EntryRow { id:string; space_id:string; creator_id:string; revision:number; created_at:string }
 interface RevisionRow { entry_id:string; revision:number; payload_json:string; reason:string; actor_id:string; created_at:string }
@@ -38,7 +38,7 @@ export class LedgerService {
   private now() { return new Date(this.clock()).toISOString(); }
   private async all<T>(sql:string,...values:unknown[]):Promise<T[]> { return (await this.stmt(sql,...values).all<T>()).results; }
   private async requireUser(user:User):Promise<void> {
-    if (!user?.id || !await this.stmt('SELECT id FROM users WHERE id = ?',user.id).first()) throw new ApiError(401,'Sign in to continue.');
+    if (!user?.id || !await this.stmt("SELECT id FROM users WHERE id = ? AND auth_type IN ('password','chatgpt')",user.id).first()) throw new ApiError(401,'Sign in to continue.');
   }
   private async membership(user:User,spaceId:string):Promise<Space> {
     await this.requireUser(user);
@@ -137,7 +137,7 @@ export class LedgerService {
   }
   async sessionUser(token:string|null):Promise<User|null> {
     if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
-    const row=await this.stmt('SELECT u.* FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires_at>?',await hashToken(token),this.clock()).first<UserRow>();
+    const row=await this.stmt("SELECT u.* FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires_at>? AND u.auth_type IN ('password','chatgpt')",await hashToken(token),this.clock()).first<UserRow>();
     return row?userView(row):null;
   }
   async logout(token:string|null):Promise<void> {
@@ -181,6 +181,19 @@ export class LedgerService {
     const space=await this.membership(user,spaceId);
     if (space.ownerId!==user.id) throw new ApiError(403,'Only the owner can rotate this invitation.');
     await this.db.batch([this.stmt('UPDATE spaces SET code=? WHERE id=? AND owner_id=?',randomToken(),spaceId,user.id),this.audit(spaceId,user.id,'code_rotated')]);
+  }
+  async addDummyMember(user:User,spaceId:string,displayName:unknown):Promise<string> {
+    const space=await this.membership(user,spaceId);
+    if (space.ownerId!==user.id) throw new ApiError(403,'Only the space creator can add people without accounts.');
+    const name=textField(displayName,'Name',80),personId=id(),now=this.now();
+    // The reserved username cannot be registered or used for password login.
+    // This is a ledger identity only: there are no credentials or sessions.
+    await this.db.batch([
+      this.stmt("INSERT INTO users (id,username,display_name,auth_type,created_at) VALUES (?,?,?,'dummy',?)",personId,`dummy:${personId}`,name,now),
+      this.stmt("INSERT INTO memberships (space_id,user_id,role,joined_at) VALUES (?,?,'member',?)",spaceId,personId,now),
+      this.audit(spaceId,user.id,'dummy_member_added',null,null,{userId:personId,displayName:name}),
+    ]);
+    return personId;
   }
   private async members(spaceId:string):Promise<Member[]> {
     const rows=await this.all<UserRow&{role:'owner'|'member';joined_at:string}>('SELECT u.*,m.role,m.joined_at FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.space_id=? ORDER BY m.joined_at,u.id',spaceId);
@@ -231,6 +244,10 @@ export class LedgerService {
     return payload;
   }
   private involved(payload:EntryPayload):string[] { return [...new Set(payload.kind==='expense'?[payload.paidById,...payload.participantIds]:[payload.fromId,payload.toId])]; }
+  private async reviewers(spaceId:string,people:string[]):Promise<string[]> {
+    const real=new Set((await this.members(spaceId)).filter(member=>member.authType!=='dummy').map(member=>member.id));
+    return people.filter(person=>real.has(person));
+  }
   private notice(spaceId:string,entryId:string,revision:number,recipientId:string,actorId:string,type:Notice['type'],reason=''):SqlStatement {
     return this.stmt('INSERT INTO notifications (id,space_id,entry_id,revision,recipient_id,actor_id,type,reason,created_at,read_at) VALUES (?,?,?,?,?,?,?,?,?,NULL)',id(),spaceId,entryId,revision,recipientId,actorId,type,reason,this.now());
   }
@@ -239,7 +256,7 @@ export class LedgerService {
   }
   async createEntry(user:User,spaceId:string,body:unknown):Promise<string> {
     await this.membership(user,spaceId);
-    const payload=await this.payload(spaceId,body); const entryId=id(); const involved=this.involved(payload); const now=this.now();
+    const payload=await this.payload(spaceId,body); const entryId=id(); const involved=await this.reviewers(spaceId,this.involved(payload)); const now=this.now();
     const version=await this.financialVersion(spaceId,payload);
     await this.atomicFinancial(spaceId,version,[
       this.stmt('INSERT INTO entries (id,space_id,creator_id,revision,created_at) VALUES (?,?,?,1,?)',entryId,spaceId,user.id,now),
@@ -264,7 +281,7 @@ export class LedgerService {
     const reason=textField(input.reason,'Correction reason',2000); const payload=await this.payload(spaceId,input);
     const version=await this.financialVersion(spaceId,payload,entryId);
     const previous=await this.all<{user_id:string}>('SELECT DISTINCT user_id FROM reviews WHERE entry_id=?',entryId);
-    const involved=[...new Set([...previous.map(r=>r.user_id),...this.involved(payload),row.creator_id])]; const revision=row.revision+1;
+    const involved=await this.reviewers(spaceId,[...new Set([...previous.map(r=>r.user_id),...this.involved(payload),row.creator_id])]); const revision=row.revision+1;
     await this.atomicEntry(entryId,spaceId,row.revision,[
       this.stmt('INSERT INTO revisions (entry_id,revision,payload_json,reason,actor_id,created_at) VALUES (?,?,?,?,?,?)',entryId,revision,JSON.stringify(payload),reason,user.id,this.now()),
       this.stmt('UPDATE entries SET revision=? WHERE id=? AND space_id=? AND revision=?',revision,entryId,spaceId,row.revision),
