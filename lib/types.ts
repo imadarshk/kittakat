@@ -3,8 +3,11 @@ export type ReviewStatus = 'pending' | 'accepted' | 'disputed';
 export interface User { id:string; username:string; displayName:string; authType:'password'|'chatgpt'|'dummy' }
 export interface Space { id:string; name:string; ownerId:string; code:string; currency:'NPR'; createdAt:string }
 export interface Member extends User { role:'owner'|'member'; joinedAt:string }
-export interface ExpenseInput { kind:'expense'; title:string; amountCents:number; category:string; date:string; paidById:string; participantIds:string[]; splitMethod:SplitMethod; splitValues:Record<string,number> }
-export interface ExpensePayload extends ExpenseInput { portions:Record<string,number> }
+export interface PhotoUpload { fileName:string; mediaType:'image/jpeg'|'image/png'; dataBase64:string }
+export interface ExpensePhoto { id:string; fileName:string; mediaType:PhotoUpload['mediaType']; uploadedById:string; createdAt:string }
+export type ExpensePhotoInput = PhotoUpload | {id:string};
+export interface ExpenseInput { kind:'expense'; title:string; description?:string; photos?:ExpensePhotoInput[]; amountCents:number; category:string; date:string; paidById:string; participantIds:string[]; splitMethod:SplitMethod; splitValues:Record<string,number> }
+export interface ExpensePayload extends Omit<ExpenseInput,'photos'> { portions:Record<string,number>; photos?:ExpensePhoto[] }
 export interface RepaymentInput { kind:'repayment'; title?:string; amountCents:number; date:string; fromId:string; toId:string }
 export interface RepaymentPayload { kind:'repayment'; title:string; amountCents:number; date:string; fromId:string; toId:string }
 export type EntryInput = ExpenseInput | RepaymentInput;

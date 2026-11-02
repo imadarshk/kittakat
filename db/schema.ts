@@ -29,6 +29,11 @@ export const revisions = sqliteTable('revisions', {
   entryId:text('entry_id').notNull().references(()=>entries.id), revision:integer('revision').notNull(), payloadJson:text('payload_json').notNull(),
   reason:text('reason').notNull(), actorId:text('actor_id').notNull().references(()=>users.id), createdAt:text('created_at').notNull(),
 },t=>[primaryKey({columns:[t.entryId,t.revision]})]);
+export const expensePhotos = sqliteTable('expense_photos', {
+  id:text('id').primaryKey(),spaceId:text('space_id').notNull().references(()=>spaces.id),entryId:text('entry_id').notNull().references(()=>entries.id),
+  uploadedById:text('uploaded_by_id').notNull().references(()=>users.id),fileName:text('file_name').notNull(),mediaType:text('media_type',{enum:['image/jpeg','image/png']}).notNull(),
+  dataBase64:text('data_base64').notNull(),createdAt:text('created_at').notNull(),
+},t=>[index('expense_photos_entry_idx').on(t.spaceId,t.entryId)]);
 export const reviews = sqliteTable('reviews', {
   entryId:text('entry_id').notNull().references(()=>entries.id), revision:integer('revision').notNull(), userId:text('user_id').notNull().references(()=>users.id),
   status:text('status',{enum:['pending','accepted','disputed']}).notNull(), reason:text('reason').notNull(),

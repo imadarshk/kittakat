@@ -19,7 +19,7 @@ test('server accounts persist across database reopen and migrations apply once',
     const service=new LedgerService(db);
     assert.equal((await service.sessionUser(account.token))?.username,'alice');
     assert.equal((await service.bootstrap(account.user,space)).activeSpace?.name,'Trip');
-    assert.equal((await db.prepare('SELECT count(*) AS n FROM _kittakat_migrations').first<{n:number}>())?.n,3);
+    assert.equal((await db.prepare('SELECT count(*) AS n FROM _kittakat_migrations').first<{n:number}>())?.n,4);
   } finally { db?.close(); rmSync(dir,{recursive:true,force:true}); }
 });
 
@@ -60,20 +60,20 @@ test('new migrations preserve accounts; a failed migration rolls back and change
     db=new NodeSqlite(file,migrations);
     await new LedgerService(db).register({username:'alice',displayName:'Alice',password:'test-password'},'local');
     db.close(); db=undefined;
-    writeFileSync(join(migrations,'0003_pending.sql'),'CREATE TABLE extra (id INTEGER PRIMARY KEY); INSERT INTO extra VALUES (7);');
+    writeFileSync(join(migrations,'0004_pending.sql'),'CREATE TABLE extra (id INTEGER PRIMARY KEY); INSERT INTO extra VALUES (7);');
     db=new NodeSqlite(file,migrations);
     assert.equal((await db.prepare('SELECT id FROM extra').first<{id:number}>())?.id,7);
     assert.equal((await db.prepare('SELECT username FROM users').first<{username:string}>())?.username,'alice');
     db.close(); db=undefined;
-    writeFileSync(join(migrations,'0004_broken.sql'),'CREATE TABLE should_rollback (id INTEGER); INSERT INTO missing_table VALUES (1);');
+    writeFileSync(join(migrations,'0005_broken.sql'),'CREATE TABLE should_rollback (id INTEGER); INSERT INTO missing_table VALUES (1);');
     assert.throws(()=>new NodeSqlite(file,migrations),/missing_table/);
     const raw=new DatabaseSync(file);
     try {
       assert.equal(raw.prepare("SELECT name FROM sqlite_master WHERE name='should_rollback'").get(),undefined);
-      assert.equal(raw.prepare('SELECT count(*) AS n FROM _kittakat_migrations').get()?.n,4);
+      assert.equal(raw.prepare('SELECT count(*) AS n FROM _kittakat_migrations').get()?.n,5);
     } finally { raw.close(); }
-    rmSync(join(migrations,'0004_broken.sql'));
-    writeFileSync(join(migrations,'0003_pending.sql'),'CREATE TABLE altered (id INTEGER);');
+    rmSync(join(migrations,'0005_broken.sql'));
+    writeFileSync(join(migrations,'0004_pending.sql'),'CREATE TABLE altered (id INTEGER);');
     assert.throws(()=>new NodeSqlite(file,migrations),/Applied migration changed/);
   } finally { db?.close(); rmSync(dir,{recursive:true,force:true}); }
 });
