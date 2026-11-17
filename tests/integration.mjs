@@ -111,6 +111,30 @@ photoState=await b.request('/api/bootstrap?spaceId='+dummySpace);photoPayload=ph
 check(photoPayload.photos.length===0&&!photoPayload.description,'Current correction can remove description and photos.');
 check(photoState.entries.find(e=>e.id===photoEntry).history[0].payload.photos[0].id===image.id,'Original receipt remains in immutable history.');
 await b.request(imagePath);
+// Cancel/restore, account and space management.
+{
+  const {id:mistake}=await a.request('/api/spaces/'+spaceId+'/entries',{...input,title:'Accidental duplicate',amountCents:777});
+  const before=await getBalances();
+  await b.request(`/api/spaces/${spaceId}/entries/${mistake}/cancel`,{expectedRevision:1,reason:'Not mine',cancelled:true},403);
+  await a.request(`/api/spaces/${spaceId}/entries/${mistake}/cancel`,{expectedRevision:1,reason:'Added twice',cancelled:true});
+  const afterCancel=await getBalances();
+  check(JSON.stringify(afterCancel)!==JSON.stringify(before),'Cancellation removes the entry from balances.');
+  const cancelledState=await b.request('/api/bootstrap?spaceId='+spaceId);
+  const cancelled=cancelledState.entries.find(e=>e.id===mistake);
+  check(cancelled.payload.cancelled===true&&cancelled.history.length===2,'Cancellation appends a revision and keeps history.');
+  check(cancelledState.notices.some(n=>n.entryId===mistake&&n.type==='cancelled'),'Involved people are notified of a cancellation.');
+  await a.request(`/api/spaces/${spaceId}/entries/${mistake}/cancel`,{expectedRevision:2,reason:'It was real',cancelled:false});
+  assert.deepEqual(await getBalances(),before);checks++;
+  await a.request('/api/auth/profile',{displayName:'आशा श्रेष्ठ'});
+  check((await b.request('/api/bootstrap?spaceId='+spaceId)).members.some(m=>m.displayName==='आशा श्रेष्ठ'),'Display name changes are visible to other members.');
+  await b.request('/api/spaces/'+spaceId+'/name',{name:'Taken over'},403);
+  await a.request('/api/spaces/'+spaceId+'/name',{name:'QA renamed '+suffix});
+  check((await c.request('/api/bootstrap?spaceId='+spaceId)).activeSpace.name==='QA renamed '+suffix,'Owner can rename the space.');
+  await a.request('/api/auth/password',{currentPassword:'wrong-password',newPassword:'QA-new-password-28'},401);
+  await a.request('/api/auth/password',{currentPassword:'QA-only-password-27',newPassword:'QA-new-password-28'});
+  check((await a.request('/api/bootstrap')).user?.id===ua.id,'Changing a password keeps the current device signed in.');
+  await a.request('/api/auth/password',{currentPassword:'QA-new-password-28',newPassword:'QA-only-password-27'});
+}
 await a.request('/api/auth/logout',{});check((await a.request('/api/bootstrap')).user===null,'Logout clears the session.');await a.request('/api/spaces',{name:'Forbidden'},401);
 await a.request('/api/auth/login',{username:'qa_a_'+suffix,password:'wrong-password'},401);await a.request('/api/auth/login',{username:'qa_a_'+suffix,password:'QA-only-password-27'});check((await a.request('/api/bootstrap')).user.id===ua.id,'Username/password login restores the account.');
-console.log(`HTTP integration passed ${checks} checks: accounts, isolation, codes, splits, reviews, repayments, exports, named dummy members, private expense photos/descriptions and logout.`);
+console.log(`HTTP integration passed ${checks} checks: accounts, isolation, codes, splits, reviews, repayments, exports, named dummy members, private expense photos/descriptions, cancel/restore, profile, space rename, password change and logout.`);

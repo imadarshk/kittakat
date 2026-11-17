@@ -1,14 +1,14 @@
 'use client';
 import { useState, type FormEvent } from 'react';
 import { ArrowRight, Check, Receipt, Banknote } from 'lucide-react';
-import { CATEGORIES, type Entry, type EntryInput, type Member, type SplitMethod } from '../lib/types';
+import { CATEGORIES, type Entry, type EntryInput, type Member, type Settlement, type SplitMethod } from '../lib/types';
 import { parseNpr, formatNpr, splitExpense } from '../lib/domain';
 import { amountInput } from '../lib/amount-input';
 import { Avatar, ErrorMessage, localDate, type Mutate } from './ui';
 import { ExpenseDescriptionFields, type PhotoDraft } from './expense-description-fields';
-type Props={members:Member[];userId:string;spaceId:string;mutate:Mutate;done:()=>void;entry?:Entry;initialKind?:'expense'|'repayment'};
-export function EntryForm({members,userId,spaceId,mutate,done,entry,initialKind='expense'}:Props){
- const original=entry?.payload;
+type Props={members:Member[];userId:string;spaceId:string;mutate:Mutate;done:()=>void;entry?:Entry;initialKind?:'expense'|'repayment';settlement?:Settlement};
+export function EntryForm({members,userId,spaceId,mutate,done,entry,initialKind='expense',settlement}:Props){
+ const original=entry?.payload??(settlement?{kind:'repayment' as const,title:'Settling up',amountCents:settlement.amountCents,date:localDate(),fromId:settlement.fromId,toId:settlement.toId}:undefined);
  const [kind,setKind]=useState(original?.kind||initialKind),[title,setTitle]=useState(original?.title||''),[amount,setAmount]=useState(original?amountInput(original.amountCents):''),[date,setDate]=useState(original?.date||localDate()),[payer,setPayer]=useState(original?.kind==='expense'?original.paidById:userId),[category,setCategory]=useState<string>(original?.kind==='expense'?original.category:CATEGORIES[0]);
  const [selected,setSelected]=useState<string[]>(original?.kind==='expense'?original.participantIds:members.map(m=>m.id)),[everyone,setEveryone]=useState(original?.kind!=='expense'||original.participantIds.length===members.length),[method,setMethod]=useState<SplitMethod>(original?.kind==='expense'?original.splitMethod:'equal');
  const [values,setValues]=useState<Record<string,string>>(()=>original?.kind==='expense'?Object.fromEntries(Object.entries(original.splitValues).map(([id,n])=>[id,original.splitMethod==='exact'?amountInput(n):String(n)])):{});

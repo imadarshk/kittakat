@@ -45,7 +45,7 @@ export const disputes = sqliteTable('disputes', {
 export const notifications = sqliteTable('notifications', {
   id:text('id').primaryKey(), spaceId:text('space_id').notNull().references(()=>spaces.id), entryId:text('entry_id').notNull().references(()=>entries.id),
   revision:integer('revision').notNull(), recipientId:text('recipient_id').notNull().references(()=>users.id), actorId:text('actor_id').notNull().references(()=>users.id),
-  type:text('type',{enum:['added','revised','disputed','resolved']}).notNull(), reason:text('reason').notNull(),createdAt:text('created_at').notNull(),readAt:text('read_at'),
+  type:text('type',{enum:['added','revised','disputed','resolved','cancelled','restored']}).notNull(), reason:text('reason').notNull(),createdAt:text('created_at').notNull(),readAt:text('read_at'),
 },t=>[index('notifications_recipient_space_idx').on(t.recipientId,t.spaceId)]);
 export const auditEvents = sqliteTable('audit_events', {
   id:text('id').primaryKey(), spaceId:text('space_id').notNull().references(()=>spaces.id), entryId:text('entry_id').references(()=>entries.id),

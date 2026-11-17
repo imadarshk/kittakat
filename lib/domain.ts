@@ -1,4 +1,4 @@
-import type { ExpenseInput, ExpensePayload, RepaymentInput, RepaymentPayload, Entry, Balance, PersonalDebt, Review, Dispute, Member } from './types.ts';
+import type { ExpenseInput, ExpensePayload, RepaymentInput, RepaymentPayload, Entry, EntryPayload, EntryFilter, Balance, PersonalDebt, Review, Dispute, Member, Settlement, SpendingInsights, CategoryInsight, MonthInsight } from './types.ts';
 import { CATEGORIES } from './types.ts';
 import { MAX_DESCRIPTION_LENGTH } from './expense-photos.ts';
 
@@ -97,6 +97,9 @@ export function validateRepayment(input:RepaymentInput):RepaymentPayload {
   return {kind:'repayment',title:input.title===undefined || input.title==='' ? 'Repayment' : title(input.title),amountCents:input.amountCents,date:input.date,fromId:input.fromId,toId:input.toId};
 }
 
+/** A cancelled entry keeps its full history but no longer moves money. */
+export function isCancelled(payload:EntryPayload):boolean { return payload.cancelled===true; }
+
 export function calculateBalances(memberIds:string[],entries:Entry[]):Balance[] {
   const balances=new Map(memberIds.map(userId=>[userId,{paid:0n,share:0n,net:0n}]));
   const member=(userId:string)=>{
@@ -105,6 +108,7 @@ export function calculateBalances(memberIds:string[],entries:Entry[]):Balance[] 
     return result;
   };
   for(const {payload:p} of entries) {
+    if(isCancelled(p)) continue;
     if(p.kind==='expense') {
       member(p.paidById).paid+=BigInt(p.amountCents);
       member(p.paidById).net+=BigInt(p.amountCents);
@@ -136,6 +140,7 @@ export function personalDebts(viewerId:string,memberIds:string[],entries:Entry[]
   };
   for(const entry of entries) {
     const p=entry.payload;
+    if(isCancelled(p)) continue;
     if(p.kind==='expense') {
       if(p.paidById===viewerId) {
         for(const participant of p.participantIds) add(participant,entry,p.portions[participant]);
@@ -155,6 +160,7 @@ export function entryStatus(entry:Entry,reviews:Review[],disputes:Dispute[],memb
   if(unresolved.some(dispute=>dispute.openedRevision===entry.revision) || current.some(review=>review.status==='disputed')) return 'Disputed';
   if(unresolved.length) return 'Correction under review';
   const p=entry.payload;
+  if(isCancelled(p)) return 'Cancelled';
   const involved=p.kind==='expense' ? new Set([p.paidById,...p.participantIds]) : new Set([p.fromId,p.toId]);
   const exempt=new Set(members.filter(member=>member.authType==='dummy').map(member=>member.id));
   if([...involved].every(userId=>exempt.has(userId) || current.some(review=>review.userId===userId && review.status==='accepted')) && !current.some(review=>review.status==='pending')) return 'Accepted';
@@ -171,4 +177,61 @@ export function formatNpr(cents:number):string {
   if(!Number.isSafeInteger(cents)) throw new Error('Amount must be integer paisa within the safe limit.');
   const amount=BigInt(cents),absolute=amount<0n?-amount:amount;
   return `NPR ${amount<0n?'-':''}${String(absolute/100n).replace(/\B(?=(\d{3})+(?!\d))/g,',')}.${String(absolute%100n).padStart(2,'0')}`;
+}
+
+/** The single repayment that clears one pairwise debt, or null when already settled. */
+export function settlementFor(viewerId:string,debt:PersonalDebt):Settlement|null {
+  if(debt.netCents>0) return {fromId:debt.userId,toId:viewerId,amountCents:debt.netCents};
+  if(debt.netCents<0) return {fromId:viewerId,toId:debt.userId,amountCents:-debt.netCents};
+  return null;
+}
+
+function monthKey(year:number,month:number):string { return `${String(year).padStart(4,'0')}-${String(month).padStart(2,'0')}`; }
+
+/** Totals for active expenses. Months run backwards from `today`'s month, including empty months. */
+export function spendingInsights(entries:Entry[],viewerId:string,today:string,monthCount=6):SpendingInsights {
+  const categories=new Map<string,CategoryInsight>();
+  const [year,month]=today.split('-').map(Number);
+  const months:MonthInsight[]=[];
+  for(let i=monthCount-1;i>=0;i--) {
+    const index=year*12+(month-1)-i;
+    months.push({month:monthKey(Math.floor(index/12),index%12+1),totalCents:0,yourShareCents:0});
+  }
+  const byMonth=new Map(months.map(item=>[item.month,item]));
+  let total=0n,yours=0n,count=0;
+  for(const {payload:p} of entries) {
+    if(p.kind!=='expense' || isCancelled(p)) continue;
+    const share=p.portions[viewerId]||0;
+    total+=BigInt(p.amountCents); yours+=BigInt(share); count++;
+    const category=categories.get(p.category)??{category:p.category,totalCents:0,yourShareCents:0,count:0};
+    category.totalCents+=p.amountCents; category.yourShareCents+=share; category.count++;
+    categories.set(p.category,category);
+    const bucket=byMonth.get(p.date.slice(0,7));
+    if(bucket) { bucket.totalCents+=p.amountCents; bucket.yourShareCents+=share; }
+  }
+  return {
+    totalCents:safeNumber(total),yourShareCents:safeNumber(yours),expenseCount:count,
+    categories:[...categories.values()].sort((a,b)=>b.totalCents-a.totalCents||a.category.localeCompare(b.category)),
+    months,
+  };
+}
+
+function involvedIds(p:EntryPayload):string[] { return p.kind==='expense'?[p.paidById,...p.participantIds]:[p.fromId,p.toId]; }
+
+/** Ledger search: every supplied criterion must match. Text also matches notes and people's names. */
+export function filterEntries(entries:Entry[],filter:EntryFilter,nameOf:(id:string)=>string=()=>''):Entry[] {
+  const text=filter.text?.trim().toLocaleLowerCase();
+  return entries.filter(({payload:p})=>{
+    if(filter.hideCancelled && isCancelled(p)) return false;
+    if(filter.kind && p.kind!==filter.kind) return false;
+    if(filter.category && (p.kind!=='expense' || p.category!==filter.category)) return false;
+    if(filter.personId && !involvedIds(p).includes(filter.personId)) return false;
+    if(filter.from && p.date<filter.from) return false;
+    if(filter.to && p.date>filter.to) return false;
+    if(text) {
+      const haystack=[p.title,p.kind==='expense'?p.category:'repayment',p.kind==='expense'?p.description??'':'',...involvedIds(p).map(nameOf)].join('\n').toLocaleLowerCase();
+      if(!haystack.includes(text)) return false;
+    }
+    return true;
+  });
 }

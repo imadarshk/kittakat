@@ -69,16 +69,26 @@ async function handle(request:Request):Promise<Response> {
         }
       }
       if (!user) throw new ApiError(401,'Sign in to continue.');
+      if (segments.length===2&&segments[0]==='auth') {
+        if (segments[1]==='profile') { await service.updateProfile(user,body); return json({ok:true}); }
+        if (segments[1]==='password') {
+          const result=await service.changePassword(user,body,ip);
+          return json({ok:true},200,{'Set-Cookie':sessionCookie(result.token,url.protocol==='https:')});
+        }
+      }
       if (segments[0]==='spaces') {
         if (segments.length===1) return json({id:await service.createSpace(user,body.name)});
         if (segments.length===2&&segments[1]==='join') return json({id:await service.joinSpace(user,body.code)});
         const spaceId=segments[1];
         if (segments.length===3&&segments[2]==='members') return json({id:await service.addDummyMember(user,spaceId,body.displayName)});
+        if (segments.length===3&&segments[2]==='name') { await service.renameSpace(user,spaceId,body.name); return json({ok:true}); }
+        if (segments.length===4&&segments[2]==='members') { await service.renameMember(user,spaceId,segments[3],body.displayName); return json({ok:true}); }
         if (segments.length===3&&segments[2]==='code') { await service.rotateCode(user,spaceId); return json({ok:true}); }
         if (segments.length===3&&segments[2]==='entries') return json({id:await service.createEntry(user,spaceId,body)});
         if (segments.length===5&&segments[2]==='entries') {
           const entryId=segments[3];
           if (segments[4]==='revise') { await service.reviseEntry(user,spaceId,entryId,body); return json({ok:true}); }
+          if (segments[4]==='cancel') { await service.setEntryCancelled(user,spaceId,entryId,body); return json({ok:true}); }
           if (segments[4]==='review') { await service.reviewEntry(user,spaceId,entryId,body); return json({ok:true}); }
         }
         if (segments.length===4&&segments[2]==='notifications'&&segments[3]==='read') { await service.markNoticesRead(user,spaceId,body.ids); return json({ok:true}); }
