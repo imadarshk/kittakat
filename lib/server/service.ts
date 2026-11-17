@@ -199,6 +199,52 @@ export class LedgerService {
     ]);
     return personId;
   }
+  async updateProfile(user:User,body:unknown):Promise<User> {
+    await this.requireUser(user);
+    const displayName=textField(object(body).displayName,'Display name',80);
+    await this.stmt("UPDATE users SET display_name=? WHERE id=? AND auth_type IN ('password','chatgpt')",displayName,user.id).run();
+    return {...user,displayName};
+  }
+  /** A new password ends every existing session, including the one used to change it. */
+  async changePassword(user:User,body:unknown,ip:string):Promise<{token:string}> {
+    await this.requireUser(user);
+    const input=object(body);
+    const row=await this.stmt('SELECT * FROM users WHERE id=?',user.id).first<UserRow>();
+    if (!row||row.auth_type!=='password'||!row.password_hash) throw new ApiError(400,'This account signs in without a password.');
+    if (typeof input.currentPassword!=='string'||!input.currentPassword) throw new ApiError(400,'Enter your current password.');
+    validatePassword(input.newPassword);
+    await this.throttle(`password:${await hashToken(`${ip}\0${user.id}`)}`,5,15*60_000);
+    if (!await verifyPassword(input.currentPassword,row.password_hash)) throw new ApiError(401,'Your current password is incorrect.');
+    if (input.newPassword===input.currentPassword) throw new ApiError(400,'Choose a password different from your current one.');
+    const passwordHash=await hashPassword(input.newPassword);
+    const session=await this.newSession(user.id);
+    await this.db.batch([
+      this.stmt('UPDATE users SET password_hash=? WHERE id=?',passwordHash,user.id),
+      this.stmt('DELETE FROM sessions WHERE user_id=?',user.id),
+      session.statement,
+    ]);
+    return {token:session.token};
+  }
+  async renameSpace(user:User,spaceId:string,name:unknown):Promise<void> {
+    const space=await this.membership(user,spaceId);
+    if (space.ownerId!==user.id) throw new ApiError(403,'Only the owner can rename this space.');
+    const value=textField(name,'Space name',80);
+    await this.db.batch([
+      this.stmt('UPDATE spaces SET name=? WHERE id=? AND owner_id=?',value,spaceId,user.id),
+      this.audit(spaceId,user.id,'space_renamed',null,null,{from:space.name,to:value}),
+    ]);
+  }
+  async renameMember(user:User,spaceId:string,memberId:string,displayName:unknown):Promise<void> {
+    const space=await this.membership(user,spaceId);
+    if (space.ownerId!==user.id) throw new ApiError(403,'Only the space creator can rename people without accounts.');
+    const name=textField(displayName,'Name',80);
+    const target=await this.stmt("SELECT u.id FROM users u JOIN memberships m ON m.user_id=u.id WHERE u.id=? AND m.space_id=? AND u.auth_type='dummy'",memberId,spaceId).first();
+    if (!target) throw new ApiError(400,'Only people without accounts in this space can be renamed here.');
+    await this.db.batch([
+      this.stmt("UPDATE users SET display_name=? WHERE id=? AND auth_type='dummy'",name,memberId),
+      this.audit(spaceId,user.id,'dummy_member_renamed',null,null,{userId:memberId,displayName:name}),
+    ]);
+  }
   private async members(spaceId:string):Promise<Member[]> {
     const rows=await this.all<UserRow&{role:'owner'|'member';joined_at:string}>('SELECT u.*,m.role,m.joined_at FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.space_id=? ORDER BY m.joined_at,u.id',spaceId);
     return rows.map(row=>({...userView(row),role:row.role,joinedAt:row.joined_at}));
@@ -312,22 +358,49 @@ export class LedgerService {
   async reviseEntry(user:User,spaceId:string,entryId:string,body:unknown):Promise<void> {
     await this.membership(user,spaceId); const row=await this.entry(spaceId,entryId);
     if (row.creator_id!==user.id) throw new ApiError(403,'Only the original creator can correct this entry.');
-    const input=object(body); const expected=input.expectedRevision;
+    const input=object(body); this.expectRevision(input.expectedRevision,row);
+    const reason=textField(input.reason,'Correction reason',2000);
+    const previous=await this.currentPayload(row);
+    if (previous.cancelled) throw new ApiError(409,'Restore this cancelled entry before correcting it.');
+    const payload=await this.payload(spaceId,input);
+    const photoStatements=await this.preparePhotos(user,spaceId,entryId,payload,input,previous);
+    await this.appendRevision(user,spaceId,row,payload,reason,'revised',photoStatements);
+  }
+  /** Cancelling appends a revision with the same details marked cancelled; restoring appends one without the mark. */
+  async setEntryCancelled(user:User,spaceId:string,entryId:string,body:unknown):Promise<void> {
+    await this.membership(user,spaceId); const row=await this.entry(spaceId,entryId);
+    if (row.creator_id!==user.id) throw new ApiError(403,'Only the original creator can cancel or restore this entry.');
+    const input=object(body);
+    if (typeof input.cancelled!=='boolean') throw new ApiError(400,'Choose to cancel or restore the entry.');
+    const reason=textField(input.reason,input.cancelled?'Cancellation reason':'Restore reason',2000);
+    this.expectRevision(input.expectedRevision,row);
+    const previous=await this.currentPayload(row);
+    if (Boolean(previous.cancelled)===input.cancelled) throw new ApiError(400,input.cancelled?'This entry is already cancelled.':'This entry is not cancelled.');
+    const payload={...previous} as EntryPayload;
+    if (input.cancelled) payload.cancelled=true; else delete payload.cancelled;
+    await this.appendRevision(user,spaceId,row,payload,reason,input.cancelled?'cancelled':'restored',[]);
+  }
+  private expectRevision(expected:unknown,row:EntryRow):void {
     if (!Number.isSafeInteger(expected)||Number(expected)<1) throw new ApiError(400,'A current expected revision is required.');
-    if (expected!==row.revision) throw new ApiError(409,'This entry changed. Refresh before correcting it.');
-    const reason=textField(input.reason,'Correction reason',2000); const payload=await this.payload(spaceId,input);
-    const snapshot=await this.stmt('SELECT payload_json FROM revisions WHERE entry_id=? AND revision=?',entryId,row.revision).first<{payload_json:string}>();
-    const photoStatements=await this.preparePhotos(user,spaceId,entryId,payload,input,snapshot?JSON.parse(snapshot.payload_json):undefined);
+    if (expected!==row.revision) throw new ApiError(409,'This entry changed. Refresh before changing it.');
+  }
+  private async currentPayload(row:EntryRow):Promise<EntryPayload> {
+    const snapshot=await this.stmt('SELECT payload_json FROM revisions WHERE entry_id=? AND revision=?',row.id,row.revision).first<{payload_json:string}>();
+    if (!snapshot) throw new ApiError(409,'This entry changed. Refresh before changing it.');
+    return JSON.parse(snapshot.payload_json) as EntryPayload;
+  }
+  private async appendRevision(user:User,spaceId:string,row:EntryRow,payload:EntryPayload,reason:string,kind:'revised'|'cancelled'|'restored',extra:SqlStatement[]):Promise<void> {
+    const entryId=row.id;
     const version=await this.financialVersion(spaceId,payload,entryId);
     const previous=await this.all<{user_id:string}>('SELECT DISTINCT user_id FROM reviews WHERE entry_id=?',entryId);
     const involved=await this.reviewers(spaceId,[...new Set([...previous.map(r=>r.user_id),...this.involved(payload),row.creator_id])]); const revision=row.revision+1;
     await this.atomicEntry(entryId,spaceId,row.revision,[
-      ...photoStatements,
+      ...extra,
       this.stmt('INSERT INTO revisions (entry_id,revision,payload_json,reason,actor_id,created_at) VALUES (?,?,?,?,?,?)',entryId,revision,JSON.stringify(payload),reason,user.id,this.now()),
       this.stmt('UPDATE entries SET revision=? WHERE id=? AND space_id=? AND revision=?',revision,entryId,spaceId,row.revision),
       ...involved.map(person=>this.reviewRow(entryId,revision,person,user.id)),
-      ...involved.filter(person=>person!==user.id).map(person=>this.notice(spaceId,entryId,revision,person,user.id,'revised',reason)),
-      this.audit(spaceId,user.id,'revised',entryId,revision,{reason}),
+      ...involved.filter(person=>person!==user.id).map(person=>this.notice(spaceId,entryId,revision,person,user.id,kind,reason)),
+      this.audit(spaceId,user.id,kind,entryId,revision,{reason}),
     ],version);
   }
   async reviewEntry(user:User,spaceId:string,entryId:string,body:unknown):Promise<void> {

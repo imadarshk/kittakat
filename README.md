@@ -16,6 +16,14 @@
 - Expenses and repayments affect balances immediately. Involved account holders can accept or dispute with a reason.
 - Disputes notify the creator and everyone involved. Corrections require an explanation, preserve earlier revisions, and remain under review until each disputing person accepts a later revision.
 - Notifications in the main navigation; Excel/CSV reports, create/join spaces and invitations inside Settings.
+- **Settle up in one tap.** Open a person on Balances and record the exact repayment that clears your pairwise debt, pre-filled with the right direction and amount.
+- **Cancel a mistaken entry.** The creator can cancel an expense or repayment with a reason (for example, a duplicate). It drops out of balances, insights and totals, stays in the revision history marked *Cancelled*, notifies everyone involved and can be disputed or restored later.
+- **Spending insights** on Home: totals by category and a six-month trend, for the whole space or just your share. Cancelled entries and repayments are not counted as spending.
+- **Better search and filters.** Search matches titles, descriptions, categories and people's names. Filter by entry type, category, person and date range, or hide cancelled entries. A summary shows how many entries match and their expense total.
+- **Account and space management.** Change your display name or password from Settings. A password change signs out every other device. Space owners can rename the space and fix the name of people without accounts.
+- **Light and dark appearance.** Follows your device by default, or choose Light or Dark in Settings.
+- **Installable.** The app includes a web manifest and icons, so phones can add it to the home screen.
+- Press **N** anywhere outside a text field to add an expense.
 - Motion and quiet interface sounds, with reduced-motion support and a sound preference.
 
 ## Authentication modes
